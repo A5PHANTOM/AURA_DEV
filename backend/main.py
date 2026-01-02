@@ -5,6 +5,7 @@ from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, HTTPException, Depends, Form, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import PlainTextResponse
 from sqlalchemy.orm import Session
 
 from .database import engine, Base, SessionLocal
@@ -74,6 +75,30 @@ def get_db():
         db.close()
 
 
+def add_system_log(db: Session, level: str, source: str, category: str, message: str, data=None):
+    """Persist a system log entry, swallowing any database errors.
+
+    Logging must never break main flows, so errors are ignored.
+    """
+    try:
+        log = models.SystemLog(
+            level=str(level or "info"),
+            source=str(source or "") or None,
+            category=str(category or "") or None,
+            message=str(message or ""),
+            data=json.dumps(data) if data is not None else None,
+        )
+        if not log.message:
+            return
+        db.add(log)
+        db.commit()
+    except Exception:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
+
 app.include_router(auth_routes.router)
 
 
@@ -134,6 +159,16 @@ async def face_recognition_endpoint(
             det["person_name"] = "Unknown"
             det["distance"] = None
             det["match_score"] = 0.0
+
+        # log the detection attempt
+        add_system_log(
+            db,
+            level="info",
+            source="backend",
+            category="face_recognition",
+            message="Face recognition called with no known people registered",
+            data={"count": len(detections)},
+        )
         return {"count": len(detections), "detections": detections}
 
     person_names = list(person_vectors.keys())
@@ -211,6 +246,30 @@ async def face_recognition_endpoint(
 
         assigned_dets.add(best_i)
         assigned_persons.add(best_j)
+
+    # log summary of this recognition call
+    try:
+        summary = {
+            "total_detections": len(detections),
+            "assigned": [
+                {
+                    "name": d.get("person_name"),
+                    "score": d.get("match_score"),
+                }
+                for d in detections
+            ],
+        }
+    except Exception:
+        summary = {"total_detections": len(detections)}
+
+    add_system_log(
+        db,
+        level="info",
+        source="backend",
+        category="face_recognition",
+        message="Face recognition processed image",
+        data=summary,
+    )
 
     return {"count": len(detections), "detections": detections}
 
@@ -312,17 +371,39 @@ def list_people(db: Session = Depends(get_db)):
 @app.get("/patrol-paths")
 def list_patrol_paths(db: Session = Depends(get_db)):
     paths = db.query(models.PatrolPath).order_by(models.PatrolPath.created_at.desc()).all()
-    return [
-        {
-            "id": p.id,
-            "name": p.name,
-            "steps": json.loads(p.steps),
-            "schedule_from": p.schedule_from,
-            "schedule_to": p.schedule_to,
-            "created_at": p.created_at.isoformat() if p.created_at else None,
-        }
-        for p in paths
-    ]
+    result = []
+    for p in paths:
+        # Decode steps
+        try:
+            steps = json.loads(p.steps)
+        except Exception:
+            steps = []
+
+        # Interpret schedule_from as JSON list of times when present;
+        # fall back to splitting on commas for older data.
+        slots: list[str] = []
+        raw = p.schedule_from
+        if raw:
+            try:
+                maybe_list = json.loads(raw)
+                if isinstance(maybe_list, list):
+                    slots = [str(x) for x in maybe_list]
+                else:
+                    slots = [s.strip() for s in str(raw).split(",") if s.strip()]
+            except Exception:
+                slots = [s.strip() for s in str(raw).split(",") if s.strip()]
+
+        result.append(
+            {
+                "id": p.id,
+                "name": p.name,
+                "steps": steps,
+                "schedule_slots": slots,
+                "created_at": p.created_at.isoformat() if p.created_at else None,
+            }
+        )
+
+    return result
 
 
 @app.post("/patrol-paths")
@@ -332,8 +413,9 @@ def create_patrol_path(
 ):
     name = (payload.get("name") or "").strip()
     steps = payload.get("steps") or []
-    schedule_from = (payload.get("schedule_from") or None) or None
-    schedule_to = (payload.get("schedule_to") or None) or None
+    # schedule is optional; can be configured later via a separate endpoint
+    schedule_from = None
+    schedule_to = None
 
     if not name:
         raise HTTPException(status_code=400, detail="Name is required")
@@ -382,6 +464,35 @@ def delete_patrol_path(path_id: int, db: Session = Depends(get_db)):
     return {"status": "deleted", "id": path_id}
 
 
+@app.patch("/patrol-paths/{path_id}/schedule")
+def update_patrol_path_schedule(
+    path_id: int,
+    payload: dict = Body(...),
+    db: Session = Depends(get_db),
+):
+    path = db.query(models.PatrolPath).filter(models.PatrolPath.id == path_id).first()
+    if path is None:
+        raise HTTPException(status_code=404, detail="Patrol path not found")
+
+    slots = payload.get("slots") or []
+    if not isinstance(slots, list):
+        raise HTTPException(status_code=400, detail="slots must be a list of time strings")
+
+    # Store as JSON in schedule_from; schedule_to unused in this mode
+    path.schedule_from = json.dumps([str(s) for s in slots]) if slots else None
+    path.schedule_to = None
+    db.commit()
+    db.refresh(path)
+
+    return {
+        "id": path.id,
+        "name": path.name,
+        "steps": json.loads(path.steps),
+        "schedule_slots": slots,
+        "created_at": path.created_at.isoformat() if path.created_at else None,
+    }
+
+
 @app.delete("/people/{person_id}")
 def delete_person(person_id: int, db: Session = Depends(get_db)):
     person = db.query(models.Person).filter(models.Person.id == person_id).first()
@@ -403,3 +514,98 @@ def delete_person(person_id: int, db: Session = Depends(get_db)):
                 pass
 
     return {"status": "deleted", "id": person_id}
+
+
+@app.post("/logs")
+def create_log(payload: dict = Body(...), db: Session = Depends(get_db)):
+    """Create a system log entry.
+
+    Used by frontend analytics and backend components to persist events.
+    """
+    level = str(payload.get("level") or "info")
+    source = str(payload.get("source") or "") or None
+    category = str(payload.get("category") or "") or None
+    message = str(payload.get("message") or "").strip()
+    data = payload.get("data")
+
+    if not message:
+        raise HTTPException(status_code=400, detail="message is required")
+
+    log = models.SystemLog(
+        level=level,
+        source=source,
+        category=category,
+        message=message,
+        data=json.dumps(data) if data is not None else None,
+    )
+    db.add(log)
+    db.commit()
+    db.refresh(log)
+
+    return {
+        "id": log.id,
+        "created_at": log.created_at.isoformat() if log.created_at else None,
+        "level": log.level,
+        "source": log.source,
+        "category": log.category,
+        "message": log.message,
+    }
+
+
+@app.get("/logs")
+def list_logs(limit: int = 100, db: Session = Depends(get_db)):
+    """Return recent system logs (most recent first)."""
+    safe_limit = max(1, min(limit, 1000))
+    logs = (
+        db.query(models.SystemLog)
+        .order_by(models.SystemLog.created_at.desc())
+        .limit(safe_limit)
+        .all()
+    )
+    result = []
+    for log in logs:
+        result.append(
+            {
+                "id": log.id,
+                "created_at": log.created_at.isoformat() if log.created_at else None,
+                "level": log.level,
+                "source": log.source,
+                "category": log.category,
+                "message": log.message,
+            }
+        )
+    return result
+
+
+@app.get("/logs/export", response_class=PlainTextResponse)
+def export_logs(limit: int = 1000, db: Session = Depends(get_db)):
+    """Export recent logs as a simple CSV for download."""
+    safe_limit = max(1, min(limit, 5000))
+    logs = (
+        db.query(models.SystemLog)
+        .order_by(models.SystemLog.created_at.desc())
+        .limit(safe_limit)
+        .all()
+    )
+
+    lines = ["id,timestamp,level,source,category,message"]
+    for log in logs:
+        ts = log.created_at.isoformat() if log.created_at else ""
+        def esc(value):
+            if value is None:
+                return ""
+            return str(value).replace('"', '""')
+
+        line = ",".join(
+            [
+                str(log.id),
+                f'"{esc(ts)}"',
+                f'"{esc(log.level)}"',
+                f'"{esc(log.source)}"',
+                f'"{esc(log.category)}"',
+                f'"{esc(log.message)}"',
+            ]
+        )
+        lines.append(line)
+
+    return "\n".join(lines)

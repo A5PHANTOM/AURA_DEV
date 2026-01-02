@@ -6,6 +6,7 @@ import Dashboard from './pages/Dashboard'
 import Manual from './pages/Manual'
 import FaceRecognition from './pages/FaceRecognition'
 import Patrol from './pages/Patrol'
+import Analytics from './pages/Analytics'
 import ProtectedRoute from './components/ProtectedRoute'
 
 export default function App() {
@@ -18,6 +19,7 @@ export default function App() {
       <Route path="/manual" element={<ProtectedRoute><Manual /></ProtectedRoute>} />
       <Route path="/patrol" element={<ProtectedRoute><Patrol /></ProtectedRoute>} />
       <Route path="/face-recognition" element={<ProtectedRoute><FaceRecognition /></ProtectedRoute>} />
+      <Route path="/analytics" element={<ProtectedRoute><Analytics /></ProtectedRoute>} />
     </Routes>
   )
 }

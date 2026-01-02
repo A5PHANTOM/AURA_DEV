@@ -20,8 +20,8 @@ export default function Patrol() {
   const [status, setStatus] = useState("");
   const [loading, setLoading] = useState(false);
   const [pathName, setPathName] = useState("");
-  const [scheduleFrom, setScheduleFrom] = useState("");
-  const [scheduleTo, setScheduleTo] = useState("");
+  const [scheduleInput, setScheduleInput] = useState("");
+  const [scheduleSlots, setScheduleSlots] = useState([]);
   const [savedPaths, setSavedPaths] = useState([]);
   const [selectedPathId, setSelectedPathId] = useState(null);
 
@@ -92,8 +92,6 @@ export default function Patrol() {
         body: JSON.stringify({
           name: pathName.trim(),
           steps,
-          schedule_from: scheduleFrom || null,
-          schedule_to: scheduleTo || null,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -116,9 +114,45 @@ export default function Patrol() {
     setSelectedPathId(path.id);
     setSteps(path.steps || []);
     setPathName(path.name || "");
-    setScheduleFrom(path.schedule_from || "");
-    setScheduleTo(path.schedule_to || "");
+    setScheduleSlots(Array.isArray(path.schedule_slots) ? path.schedule_slots : []);
+    setScheduleInput("");
     setStatus("Loaded saved path.");
+  };
+
+  const saveScheduleForSelectedPath = async () => {
+    if (!selectedPathId) {
+      setStatus("Select a path first.");
+      return;
+    }
+    setLoading(true);
+    setStatus("");
+    try {
+      const res = await fetch(`${BACKEND_API}/patrol-paths/${selectedPathId}/schedule`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          slots: scheduleSlots,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setStatus(data.detail || data.error || "Failed to save schedule.");
+      } else {
+        setStatus("Schedule updated.");
+        // sync local list
+        setSavedPaths((prev) =>
+          prev.map((p) =>
+            p.id === selectedPathId
+              ? { ...p, schedule_slots: data.schedule_slots }
+              : p
+          )
+        );
+      }
+    } catch (e) {
+      setStatus("Backend not reachable.");
+    } finally {
+      setLoading(false);
+    }
   };
 
   const deleteSavedPath = async (id) => {
@@ -254,7 +288,7 @@ export default function Patrol() {
                 )}
               </div>
 
-              {/* Save section: name + optional schedule */}
+              {/* Save section: name only (time is configured separately) */}
               <div className="mt-4 border-t border-white/10 pt-3 space-y-2 text-sm">
                 <h3 className="text-sm font-semibold">Save Path</h3>
                 <div className="flex flex-col gap-2">
@@ -265,27 +299,6 @@ export default function Patrol() {
                     onChange={(e) => setPathName(e.target.value)}
                     className="bg-black/40 border border-white/20 rounded px-2 py-1 text-sm"
                   />
-                  <div className="flex flex-wrap gap-3 items-center text-xs text-slate-300">
-                    <div className="flex items-center gap-1">
-                      <span>From</span>
-                      <input
-                        type="time"
-                        value={scheduleFrom}
-                        onChange={(e) => setScheduleFrom(e.target.value)}
-                        className="bg-black/40 border border-white/20 rounded px-2 py-1 text-xs"
-                      />
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <span>To</span>
-                      <input
-                        type="time"
-                        value={scheduleTo}
-                        onChange={(e) => setScheduleTo(e.target.value)}
-                        className="bg-black/40 border border-white/20 rounded px-2 py-1 text-xs"
-                      />
-                    </div>
-                    <span className="text-[11px] text-slate-400">(optional active time window)</span>
-                  </div>
                   <button
                     type="button"
                     onClick={savePathToBackend}
@@ -358,8 +371,8 @@ export default function Patrol() {
                           <div className="font-semibold truncate">{p.name}</div>
                           <div className="text-[11px] text-slate-300 truncate">
                             {p.steps?.length || 0} steps
-                              {p.schedule_from && p.schedule_to &&
-                                ` - ${p.schedule_from} - ${p.schedule_to}`}
+                            {Array.isArray(p.schedule_slots) && p.schedule_slots.length > 0 &&
+                              ` - ${p.schedule_slots.join(", ")}`}
                           </div>
                         </button>
                         <button
@@ -373,6 +386,57 @@ export default function Patrol() {
                     ))
                   )}
                 </div>
+                {selectedPathId && (
+                  <div className="mt-3 border-t border-white/10 pt-3 space-y-2 text-xs text-slate-300">
+                    <h4 className="text-sm font-semibold text-white">Schedule selected path</h4>
+                    <div className="flex flex-wrap gap-3 items-center">
+                      <input
+                        type="time"
+                        value={scheduleInput}
+                        onChange={(e) => setScheduleInput(e.target.value)}
+                        className="bg-black/40 border border-white/20 rounded px-2 py-1 text-xs"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (!scheduleInput) return;
+                          if (!scheduleSlots.includes(scheduleInput)) {
+                            setScheduleSlots((prev) => [...prev, scheduleInput].sort());
+                          }
+                          setScheduleInput("");
+                        }}
+                        className="text-[11px] bg-emerald-600 hover:bg-emerald-500 text-white rounded px-2 py-1"
+                      >
+                        Add time
+                      </button>
+                    </div>
+                    {scheduleSlots.length > 0 && (
+                      <div className="flex flex-wrap gap-2">
+                        {scheduleSlots.map((t) => (
+                          <button
+                            key={t}
+                            type="button"
+                            onClick={() =>
+                              setScheduleSlots((prev) => prev.filter((x) => x !== t))
+                            }
+                            className="px-2 py-0.5 rounded-full bg-white/10 text-[11px] flex items-center gap-1"
+                          >
+                            <span>{t}</span>
+                            <span className="text-red-300">×</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    <button
+                      type="button"
+                      onClick={saveScheduleForSelectedPath}
+                      disabled={loading}
+                      className="mt-1 text-[11px] bg-cyan-600 hover:bg-cyan-500 disabled:opacity-60 text-white rounded px-3 py-1"
+                    >
+                      Save Schedule
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
           </div>

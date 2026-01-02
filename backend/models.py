@@ -42,3 +42,16 @@ class PatrolPath(Base):
     schedule_from = Column(String, nullable=True)
     schedule_to = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class SystemLog(Base):
+    __tablename__ = 'system_logs'
+
+    id = Column(Integer, primary_key=True, index=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    level = Column(String, nullable=False)  # e.g. info, warning, error, alert
+    source = Column(String, nullable=True)  # e.g. backend, esp32, face-recognition
+    category = Column(String, nullable=True)  # e.g. flame, gas, ultrasonic, face
+    message = Column(Text, nullable=False)
+    data = Column(Text, nullable=True)  # optional JSON payload
+
