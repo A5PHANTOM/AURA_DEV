@@ -1,8 +1,7 @@
 import { useEffect, useState } from "react";
 import Navbar from "../components/Navbar";
 import Starfield from "../components/Starfield";
-
-const API = "http://192.168.216.32"; // ESP32 HTTP server (same as Manual)
+import { ESP32_API } from "../services/espConfig";
 // Backend API (FastAPI) for storing patrol paths
 import { API_URL as BACKEND_API } from "../services/faceService";
 
@@ -54,7 +53,7 @@ export default function Patrol() {
     setLoading(true);
     setStatus("");
     try {
-      const res = await fetch(`${API}/patrol/set`, {
+      const res = await fetch(`${ESP32_API}/patrol/set`, {
         method: "POST",
         // Send JSON, but let the browser use a simple Content-Type
         // (avoids a CORS preflight that the ESP32 server doesn't handle)
@@ -186,7 +185,7 @@ export default function Patrol() {
     setLoading(true);
     setStatus("");
     try {
-      const res = await fetch(`${API}/patrol/start`);
+      const res = await fetch(`${ESP32_API}/patrol/start`);
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         setStatus(data.error || "Failed to start patrol.");
@@ -204,7 +203,7 @@ export default function Patrol() {
     setLoading(true);
     setStatus("");
     try {
-      const res = await fetch(`${API}/patrol/stop`);
+      const res = await fetch(`${ESP32_API}/patrol/stop`);
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         setStatus(data.error || "Failed to stop patrol.");

@@ -1,5 +1,6 @@
 import React from "react";
 import { NavLink, useNavigate } from "react-router-dom";
+import GlobalAlertBar from "./GlobalAlertBar";
 
 export const NavItem = ({ title, to }) => (
 	<NavLink
@@ -26,29 +27,32 @@ export default function Navbar() {
 	};
 
 	return (
-		<nav className="fixed top-0 left-0 w-full bg-black/90 backdrop-blur-sm border-b border-white/10 px-6 py-4 flex justify-between items-center z-50">
+		<>
+			<nav className="fixed top-0 left-0 w-full bg-black/90 backdrop-blur-sm border-b border-white/10 px-6 py-4 flex justify-between items-center z-50">
 
-			{/* LOGO */}
-			<div className="text-white text-xl font-bold tracking-widest font-aura select-none">AURA</div>
+				{/* LOGO */}
+				<div className="text-white text-xl font-bold tracking-widest font-aura select-none">AURA</div>
 
-			{/* MENU + ACTIONS */}
-			<div className="flex items-center gap-4">
-				<div className="flex gap-6">
-					<NavItem title="MANUAL" to="/manual" />
-					<NavItem title="PATROL" to="/patrol" />
-					<NavItem title="ANALYTICS" to="/analytics" />
-					<NavItem title="FACE RECOGNITION" to="/face-recognition" />
+				{/* MENU + ACTIONS */}
+				<div className="flex items-center gap-4">
+					<div className="flex gap-6">
+						<NavItem title="MANUAL" to="/manual" />
+						<NavItem title="PATROL" to="/patrol" />
+						<NavItem title="ANALYTICS" to="/analytics" />
+						<NavItem title="FACE RECOGNITION" to="/face-recognition" />
+					</div>
+
+					<button
+						onClick={handleLogout}
+						className="text-sm bg-transparent border border-white/20 text-white px-3 py-1 rounded hover:bg-white/10"
+					>
+						LOGOUT
+					</button>
 				</div>
 
-				<button
-					onClick={handleLogout}
-					className="text-sm bg-transparent border border-white/20 text-white px-3 py-1 rounded hover:bg-white/10"
-				>
-					LOGOUT
-				</button>
-			</div>
-
-		</nav>
+			</nav>
+			<GlobalAlertBar />
+		</>
 	);
 }
 

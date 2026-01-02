@@ -1,9 +1,7 @@
 import { useEffect, useState } from "react";
 import Navbar from "../components/Navbar";
 import Starfield from "../components/Starfield";
-
-const API = "http://192.168.216.32"; // ESP32 HTTP server
-const GAS_THRESHOLD = 1500; // must match ESP32 sketch
+import { ESP32_API, GAS_THRESHOLD } from "../services/espConfig";
 
 export default function Manual() {
   const [data, setData] = useState({});
@@ -11,7 +9,7 @@ export default function Manual() {
 
   const move = async (dir) => {
     try {
-      const res = await fetch(`${API}/move?dir=${dir}`);
+      const res = await fetch(`${ESP32_API}/move?dir=${dir}`);
       const text = await res.text();
       let json = null;
       try {
@@ -55,7 +53,7 @@ export default function Manual() {
 
   useEffect(() => {
     const i = setInterval(() => {
-      fetch(`${API}/status`)
+      fetch(`${ESP32_API}/status`)
         .then((r) => r.json())
         .then(setData)
         .catch(() => {});

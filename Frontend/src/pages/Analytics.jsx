@@ -2,11 +2,7 @@ import { useEffect, useState, useRef } from "react";
 import Navbar from "../components/Navbar";
 import Starfield from "../components/Starfield";
 import { API_URL as BACKEND_API } from "../services/faceService";
-
-// ESP32 rover HTTP server (same as Manual/Patrol)
-const ESP32_API = "http://192.168.216.32";
-
-const GAS_THRESHOLD = 1500;
+import { ESP32_API, GAS_THRESHOLD } from "../services/espConfig";
 
 function Bar({ label, value, color }) {
   const clamped = Math.max(0, Math.min(100, value ?? 0));
