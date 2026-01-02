@@ -1,0 +1,11 @@
+INFO:     Will watch for changes in these directories: ['/Users/mac/Desktop/AURA_DEV']
+INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+INFO:     Started reloader process [38765] using WatchFiles
+INFO:     Started server process [38811]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     127.0.0.1:63212 - "POST /auth/login HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54346 - "GET /apple-touch-icon-precomposed.png HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:54347 - "GET /apple-touch-icon.png HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:54348 - "GET /favicon.ico HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:54345 - "GET / HTTP/1.1" 200 OK

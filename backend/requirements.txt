@@ -1,0 +1,14 @@
+fastapi==0.95.2
+uvicorn[standard]==0.22.0
+SQLAlchemy==1.4.49
+alembic==1.11.1
+python-dotenv==1.0.0
+passlib[bcrypt]==1.7.4
+PyJWT==2.8.0
+typing_extensions==4.7.1
+email-validator==1.3.1
+
+# For image upload and YOLO-based face detection
+python-multipart==0.0.9
+opencv-python==4.10.0.84
+ultralytics==8.3.0
