@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { login } from '../services/authService'
 import { useNavigate } from 'react-router-dom';
-import Navbar from "../components/Navbar";
 
 // real `login` imported from services/authService
 
@@ -113,8 +112,6 @@ export default function Login() {
     <div className="flex flex-col items-center justify-center min-h-screen bg-black p-4 pt-20 relative overflow-hidden">
       <style>{auraFontStyles}</style>
       <Starfield />
-
-      <Navbar />
 
       <div className="z-10 text-center mb-10">
         <h1 className="text-8xl font-black text-white font-aura select-none">AURA</h1>
