@@ -39,6 +39,7 @@ export default function Navbar() {
 						<NavItem title="MANUAL" to="/manual" />
 						<NavItem title="PATROL" to="/patrol" />
 						<NavItem title="ANALYTICS" to="/analytics" />
+						<NavItem title="PEOPLE" to="/people" />
 						<NavItem title="FACE RECOGNITION" to="/face-recognition" />
 					</div>
 

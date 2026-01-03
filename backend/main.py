@@ -21,6 +21,11 @@ app = FastAPI(title="Auth Backend")
 # Smaller values = stricter matching (more likely to mark as Unknown).
 MATCH_DISTANCE_THRESHOLD = 0.5
 
+# Minimum match-score (0.0–1.0) required to treat a detection
+# as this user. Anything below is returned as Unknown, but we still
+# expose the score so the frontend can display e.g. 20% confidence.
+MIN_MATCH_SCORE = 0.2  # 20%
+
 # Simple media storage for reference face images
 BASE_DIR = Path(__file__).parent
 MEDIA_ROOT = BASE_DIR / "media"
@@ -240,9 +245,16 @@ async def face_recognition_endpoint(
         name = person_names[best_j]
         match_score = max(0.0, 1.0 - (best_dist / MATCH_DISTANCE_THRESHOLD))
 
-        detections[best_i]["person_name"] = name
+        # Always expose distance and match_score for the best candidate,
+        # even if we ultimately treat it as Unknown below the confidence
+        # threshold. This lets the frontend show e.g. 30% confidence.
         detections[best_i]["distance"] = best_dist
         detections[best_i]["match_score"] = match_score
+
+        # Only assign a concrete person_name if confidence is high enough;
+        # otherwise we leave it as "Unknown" but still record the score.
+        if match_score >= MIN_MATCH_SCORE:
+            detections[best_i]["person_name"] = name
 
         assigned_dets.add(best_i)
         assigned_persons.add(best_j)

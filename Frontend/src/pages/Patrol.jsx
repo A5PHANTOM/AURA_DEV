@@ -23,6 +23,8 @@ export default function Patrol() {
   const [scheduleSlots, setScheduleSlots] = useState([]);
   const [savedPaths, setSavedPaths] = useState([]);
   const [selectedPathId, setSelectedPathId] = useState(null);
+  const [cameraFrameUrl, setCameraFrameUrl] = useState(null);
+  const [cameraError, setCameraError] = useState("");
 
   const addStep = () => {
     const t = Number(currentTime);
@@ -179,6 +181,42 @@ export default function Patrol() {
   // Initial load of saved paths
   useEffect(() => {
     loadSavedPaths();
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const fetchFrame = async () => {
+      try {
+        const res = await fetch(`${ESP32_API}/capture`);
+        if (!res.ok) throw new Error("ESP32 capture failed");
+        const blob = await res.blob();
+        if (!blob || cancelled) return;
+
+        const url = URL.createObjectURL(blob);
+        setCameraFrameUrl((old) => {
+          if (old) URL.revokeObjectURL(old);
+          return url;
+        });
+        setCameraError("");
+      } catch (e) {
+        if (!cancelled) {
+          setCameraError("ESP32-CAM not reachable");
+        }
+      }
+    };
+
+    fetchFrame();
+    const id = setInterval(fetchFrame, 1000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+      setCameraFrameUrl((old) => {
+        if (old) URL.revokeObjectURL(old);
+        return null;
+      });
+    };
   }, []);
 
   const startPatrol = async () => {
@@ -438,6 +476,24 @@ export default function Patrol() {
                 )}
               </div>
             </div>
+          </div>
+
+          <div className="mt-6">
+            <h2 className="text-xl font-semibold text-cyan-400 mb-2">Live Camera</h2>
+            <div className="flex items-center justify-center border border-cyan-500 rounded-lg bg-black/60 min-h-[180px]">
+              {cameraFrameUrl ? (
+                <img
+                  src={cameraFrameUrl}
+                  alt="ESP32 live view"
+                  className="max-h-64 rounded-md object-contain"
+                />
+              ) : (
+                <span className="text-gray-400 text-sm">CAMERA STREAM OFFLINE</span>
+              )}
+            </div>
+            <p className="text-xs text-gray-500 mt-2">
+              {cameraError || `ESP32-CAM at ${ESP32_API}`}
+            </p>
           </div>
         </div>
       </div>

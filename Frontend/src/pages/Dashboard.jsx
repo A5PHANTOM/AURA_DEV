@@ -1,6 +1,7 @@
-import React from "react";
+import React, { useEffect, useState } from "react";
 import Navbar from "../components/Navbar";
 import Starfield from "../components/Starfield";
+import { ESP32_API } from "../services/espConfig";
 
 const auraFontStyles = `
   @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@900&display=swap');
@@ -8,6 +9,47 @@ const auraFontStyles = `
 `;
 
 function Dashboard() {
+  const [cameraFrameUrl, setCameraFrameUrl] = useState(null);
+  const [cameraError, setCameraError] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const fetchFrame = async () => {
+      try {
+        const res = await fetch(`${ESP32_API}/capture`);
+        if (!res.ok) throw new Error("ESP32 capture failed");
+        const blob = await res.blob();
+        if (!blob || cancelled) return;
+
+        const url = URL.createObjectURL(blob);
+        setCameraFrameUrl((old) => {
+          if (old) URL.revokeObjectURL(old);
+          return url;
+        });
+        setCameraError("");
+      } catch (e) {
+        if (!cancelled) {
+          setCameraError("ESP32-CAM not reachable");
+        }
+      }
+    };
+
+    // initial frame
+    fetchFrame();
+    // poll every second for a simple live view
+    const id = setInterval(fetchFrame, 1000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+      setCameraFrameUrl((old) => {
+        if (old) URL.revokeObjectURL(old);
+        return null;
+      });
+    };
+  }, []);
+
   return (
   <div className="flex flex-col items-center justify-start min-h-screen bg-black p-4 pt-20 relative overflow-hidden">
       <style>{auraFontStyles}</style>
@@ -35,10 +77,20 @@ function Dashboard() {
         {/* CENTER CAMERA */}
         <div className="col-span-1 md:col-span-2 bg-[#081423] rounded-lg p-4 shadow-lg flex flex-col justify-between">
           <h2 className="text-cyan-400 font-semibold mb-2">Live Camera</h2>
-          <div className="flex-1 flex items-center justify-center border border-cyan-500 rounded-lg text-gray-400">
-            CAMERA STREAM OFFLINE
+          <div className="flex-1 flex items-center justify-center border border-cyan-500 rounded-lg bg-black/60">
+            {cameraFrameUrl ? (
+              <img
+                src={cameraFrameUrl}
+                alt="ESP32 live view"
+                className="max-h-64 rounded-md object-contain"
+              />
+            ) : (
+              <span className="text-gray-400 text-sm">CAMERA STREAM OFFLINE</span>
+            )}
           </div>
-          <p className="text-xs text-gray-500 mt-2">ESP32-CAM not connected</p>
+          <p className="text-xs text-gray-500 mt-2">
+            {cameraError || `ESP32-CAM at ${ESP32_API}`}
+          </p>
         </div>
 
         {/* RIGHT SENSOR PANEL */}
