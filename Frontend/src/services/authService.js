@@ -1,6 +1,12 @@
 import axios from 'axios';
-// In Vite, use import.meta.env for environment variables (process is not available in the browser)
-const API_URL = import.meta.env.VITE_API_BASE || "http://127.0.0.1:8000";
+
+// Base URL for the backend API.
+// Priority:
+// 1) VITE_API_BASE (for custom setups)
+// 2) Same host as the frontend (works on LAN/mobile) on port 8000
+const API_URL =
+    import.meta.env.VITE_API_BASE ||
+    `http://${window.location.hostname}:8000`;
 
 export async function login(username, password) {
     // OAuth2 Password flow on the backend expects form-encoded data

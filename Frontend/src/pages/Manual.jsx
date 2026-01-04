@@ -1,17 +1,24 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Navbar from "../components/Navbar";
 import Starfield from "../components/Starfield";
-import { ESP32_API, GAS_THRESHOLD } from "../services/espConfig";
+import { ESP32_ROVER_API, ESP32_CAM_API, GAS_THRESHOLD } from "../services/espConfig";
+import { runFaceRecognition, API_URL as BACKEND_API } from "../services/faceService";
 
 export default function Manual() {
   const [data, setData] = useState({});
   const [moveMessage, setMoveMessage] = useState("");
   const [cameraFrameUrl, setCameraFrameUrl] = useState(null);
   const [cameraError, setCameraError] = useState("");
+  const [detections, setDetections] = useState([]);
+  const [frameSize, setFrameSize] = useState({ width: null, height: null });
+  const lastRecognitionAtRef = useRef(0);
+  const recognitionInFlightRef = useRef(false);
+  const lastFlameRef = useRef(false);
+  const lastGasHighRef = useRef(false);
 
   const move = async (dir) => {
     try {
-      const res = await fetch(`${ESP32_API}/move?dir=${dir}`);
+      const res = await fetch(`${ESP32_ROVER_API}/move?dir=${dir}`);
       const text = await res.text();
       let json = null;
       try {
@@ -55,7 +62,7 @@ export default function Manual() {
 
   useEffect(() => {
     const i = setInterval(() => {
-      fetch(`${ESP32_API}/status`)
+      fetch(`${ESP32_ROVER_API}/status`)
         .then((r) => r.json())
         .then(setData)
         .catch(() => {});
@@ -63,13 +70,29 @@ export default function Manual() {
     return () => clearInterval(i);
   }, []);
 
+  // Trigger backend fire / gas alerts (and thus Telegram) when sensor state changes
+  useEffect(() => {
+    const flameNow = !!data.flame;
+    if (flameNow && !lastFlameRef.current) {
+      fetch(`${BACKEND_API}/alert/fire`, { method: "POST" }).catch(() => {});
+    }
+    lastFlameRef.current = flameNow;
+
+    const gasVal = data.gas;
+    const gasHigh = gasVal != null && gasVal > GAS_THRESHOLD;
+    if (gasHigh && !lastGasHighRef.current) {
+      fetch(`${BACKEND_API}/alert/gas`, { method: "POST" }).catch(() => {});
+    }
+    lastGasHighRef.current = gasHigh;
+  }, [data]);
+
   useEffect(() => {
     let cancelled = false;
 
     const loop = async () => {
       while (!cancelled) {
         try {
-          const res = await fetch(`${ESP32_API}/capture`);
+          const res = await fetch(`${ESP32_CAM_API}/capture`);
           if (!res.ok) throw new Error("ESP32 capture failed");
           const blob = await res.blob();
           if (!blob || cancelled) break;
@@ -80,6 +103,37 @@ export default function Manual() {
             return url;
           });
           setCameraError("");
+
+          // one-time measurement of frame dimensions for overlay scaling
+          if (!frameSize.width || !frameSize.height) {
+            const img = new Image();
+            img.onload = () => {
+              setFrameSize({ width: img.naturalWidth, height: img.naturalHeight });
+            };
+            img.src = url;
+          }
+
+          // periodically run face recognition on the live feed
+          const now = Date.now();
+          const MIN_INTERVAL_MS = 1500;
+          if (
+            !recognitionInFlightRef.current &&
+            now - lastRecognitionAtRef.current >= MIN_INTERVAL_MS
+          ) {
+            lastRecognitionAtRef.current = now;
+            recognitionInFlightRef.current = true;
+            const file = new File([blob], "frame.jpg", { type: blob.type || "image/jpeg" });
+            runFaceRecognition(file)
+              .then((data) => {
+                setDetections(data.detections || []);
+              })
+              .catch(() => {
+                // ignore recognition errors, keep camera running
+              })
+              .finally(() => {
+                recognitionInFlightRef.current = false;
+              });
+          }
         } catch (e) {
           if (!cancelled) {
             setCameraError("ESP32-CAM not reachable");
@@ -99,6 +153,7 @@ export default function Manual() {
         if (old) URL.revokeObjectURL(old);
         return null;
       });
+      setDetections([]);
     };
   }, []);
 
@@ -130,17 +185,47 @@ export default function Manual() {
               </div>
               <div className="flex items-center justify-center border border-cyan-500/40 rounded-xl bg-gradient-to-br from-slate-900 via-black to-slate-900 min-h-[220px] overflow-hidden">
                 {cameraFrameUrl ? (
-                  <img
-                    src={cameraFrameUrl}
-                    alt="ESP32 live view"
-                    className="max-h-72 rounded-lg object-contain shadow-[0_0_40px_rgba(34,211,238,0.35)]"
-                  />
+                  <div className="relative">
+                    <img
+                      src={cameraFrameUrl}
+                      alt="ESP32 live view"
+                      className="max-h-72 rounded-lg object-contain shadow-[0_0_40px_rgba(34,211,238,0.35)]"
+                    />
+                    {frameSize.width && frameSize.height && detections.map((d, idx) => {
+                      const bbox = d.bbox || [];
+                      if (bbox.length !== 4) return null;
+                      const [x1, y1, x2, y2] = bbox;
+                      const left = (x1 / frameSize.width) * 100;
+                      const top = (y1 / frameSize.height) * 100;
+                      const width = ((x2 - x1) / frameSize.width) * 100;
+                      const height = ((y2 - y1) / frameSize.height) * 100;
+                      const isUnknown = !d.person_name || d.person_name === "Unknown";
+                      const borderColor = isUnknown ? "border-red-500" : "border-emerald-400";
+                      const bgColor = isUnknown ? "bg-red-500" : "bg-emerald-500";
+                      const showScore = typeof d.match_score === "number" && d.match_score >= 0.2;
+                      const scoreLabel = showScore ? ` (${(d.match_score * 100).toFixed(1)}%)` : "";
+                      return (
+                        <div
+                          key={idx}
+                          className={`absolute border-2 ${borderColor} pointer-events-none`}
+                          style={{ left: `${left}%`, top: `${top}%`, width: `${width}%`, height: `${height}%` }}
+                        >
+                          <div
+                            className={`absolute left-0 -top-5 px-1 py-0.5 text-[10px] font-semibold text-white rounded ${bgColor}`}
+                          >
+                            {isUnknown ? "Unknown" : d.person_name}
+                            {scoreLabel}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
                 ) : (
                   <span className="text-gray-400 text-sm">CAMERA STREAM OFFLINE</span>
                 )}
               </div>
               <p className="text-[11px] text-slate-400 flex items-center justify-between">
-                <span>{cameraError || `ESP32-CAM at ${ESP32_API}`}</span>
+                <span>{cameraError || `ESP32-CAM at ${ESP32_CAM_API}`}</span>
                 <span className="italic">Hold W/A/S/D to drive · Release to stop</span>
               </p>
             </div>
@@ -155,33 +240,46 @@ export default function Manual() {
                 <div />
                 <button
                   className="bg-white/10 hover:bg-cyan-500/30 border border-cyan-400/40 text-white py-2 rounded-xl text-xl shadow-lg transition-colors"
-                  onClick={() => move("forward")}
+                  type="button"
+                  onPointerDown={() => move("forward")}
+                  onPointerUp={() => move("stop")}
+                  onPointerLeave={() => move("stop")}
                 >
                   ↑
                 </button>
                 <div />
                 <button
                   className="bg-white/10 hover:bg-cyan-500/30 border border-cyan-400/40 text-white py-2 rounded-xl text-xl shadow-lg transition-colors"
-                  onClick={() => move("left")}
+                  type="button"
+                  onPointerDown={() => move("left")}
+                  onPointerUp={() => move("stop")}
+                  onPointerLeave={() => move("stop")}
                 >
                   ←
                 </button>
                 <button
                   className="bg-white/10 hover:bg-red-500/40 border border-red-400/60 text-white py-2 rounded-xl text-xs font-semibold shadow-lg transition-colors col-span-1"
+                  type="button"
                   onClick={() => move("stop")}
                 >
                   STOP
                 </button>
                 <button
                   className="bg-white/10 hover:bg-cyan-500/30 border border-cyan-400/40 text-white py-2 rounded-xl text-xl shadow-lg transition-colors"
-                  onClick={() => move("right")}
+                  type="button"
+                  onPointerDown={() => move("right")}
+                  onPointerUp={() => move("stop")}
+                  onPointerLeave={() => move("stop")}
                 >
                   →
                 </button>
                 <div />
                 <button
                   className="bg-white/10 hover:bg-cyan-500/30 border border-cyan-400/40 text-white py-2 rounded-xl text-xl shadow-lg transition-colors col-span-3"
-                  onClick={() => move("backward")}
+                  type="button"
+                  onPointerDown={() => move("backward")}
+                  onPointerUp={() => move("stop")}
+                  onPointerLeave={() => move("stop")}
                 >
                   ↓
                 </button>

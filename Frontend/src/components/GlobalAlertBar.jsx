@@ -1,30 +1,75 @@
 import { useEffect, useState, useRef } from "react";
-import { ESP32_API, GAS_THRESHOLD } from "../services/espConfig";
+import { ESP32_ROVER_API, GAS_THRESHOLD } from "../services/espConfig";
 
 export default function GlobalAlertBar() {
   const [alert, setAlert] = useState(null);
   const [visible, setVisible] = useState(false);
   const acknowledgedRef = useRef(false);
+  const lastHazardRef = useRef(false);
   const audioCtxRef = useRef(null);
   const oscillatorRef = useRef(null);
   const gainRef = useRef(null);
 
+  const triggerBrowserNotification = async (type, message, state) => {
+    try {
+      if (typeof window === "undefined" || typeof Notification === "undefined") {
+        return;
+      }
+
+      if (Notification.permission === "default") {
+        try {
+          await Notification.requestPermission();
+        } catch {
+          // ignore permission errors
+        }
+      }
+
+      if (Notification.permission === "granted") {
+        const title = type === "fire" ? "FIRE WARNING" : "GAS WARNING";
+        const body = state ? `${message} | Rover: ${state}` : message;
+        // tag prevents stacking unlimited duplicates
+        new Notification(title, {
+          body,
+          tag: "aura-hazard",
+          renotify: true,
+        });
+      }
+
+      if (typeof navigator !== "undefined" && "vibrate" in navigator) {
+        navigator.vibrate([250, 150, 250, 400]);
+      }
+    } catch {
+      // notifications are best-effort
+    }
+  };
+
   useEffect(() => {
     const poll = () => {
-      fetch(`${ESP32_API}/status`)
+      fetch(`${ESP32_ROVER_API}/status`)
         .then((r) => r.json())
         .then((data) => {
           const fire = !!data?.flame;
           const gasVal = data?.gas;
           const gasHigh = gasVal != null && gasVal > GAS_THRESHOLD;
 
-          if ((fire || gasHigh) && !acknowledgedRef.current) {
+          const hazardActive = fire || gasHigh;
+
+          if (hazardActive && !acknowledgedRef.current) {
             const type = fire ? "fire" : "gas";
             const msg = fire
               ? "Fire detected by flame sensor"
               : `Gas level HIGH (${gasVal})`;
+
             setAlert({ type, message: msg, state: data?.state || "" });
             setVisible(true);
+
+            // Only fire system notification on rising edge
+            if (!lastHazardRef.current) {
+              lastHazardRef.current = true;
+              triggerBrowserNotification(type, msg, data?.state || "");
+            }
+          } else if (!hazardActive) {
+            lastHazardRef.current = false;
           }
         })
         .catch(() => {
@@ -122,7 +167,7 @@ export default function GlobalAlertBar() {
     setVisible(false);
     stopAlarm();
     try {
-      await fetch(`${ESP32_API}/buzzer/off`);
+      await fetch(`${ESP32_ROVER_API}/buzzer/off`);
     } catch (e) {
       // ignore; user still acknowledged
     }

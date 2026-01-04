@@ -1,9 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Navbar from "../components/Navbar";
 import Starfield from "../components/Starfield";
-import { ESP32_API } from "../services/espConfig";
+import { ESP32_ROVER_API, ESP32_CAM_API } from "../services/espConfig";
 // Backend API (FastAPI) for storing patrol paths
 import { API_URL as BACKEND_API } from "../services/faceService";
+import { runFaceRecognition } from "../services/faceService";
 
 const ACTION_OPTIONS = [
   { value: "forward", label: "Forward" },
@@ -25,6 +26,10 @@ export default function Patrol() {
   const [selectedPathId, setSelectedPathId] = useState(null);
   const [cameraFrameUrl, setCameraFrameUrl] = useState(null);
   const [cameraError, setCameraError] = useState("");
+  const [detections, setDetections] = useState([]);
+  const [frameSize, setFrameSize] = useState({ width: null, height: null });
+  const lastRecognitionAtRef = useRef(0);
+  const recognitionInFlightRef = useRef(false);
 
   const addStep = () => {
     const t = Number(currentTime);
@@ -55,7 +60,7 @@ export default function Patrol() {
     setLoading(true);
     setStatus("");
     try {
-      const res = await fetch(`${ESP32_API}/patrol/set`, {
+      const res = await fetch(`${ESP32_ROVER_API}/patrol/set`, {
         method: "POST",
         // Send JSON, but let the browser use a simple Content-Type
         // (avoids a CORS preflight that the ESP32 server doesn't handle)
@@ -188,7 +193,7 @@ export default function Patrol() {
 
     const fetchFrame = async () => {
       try {
-        const res = await fetch(`${ESP32_API}/capture`);
+        const res = await fetch(`${ESP32_CAM_API}/capture`);
         if (!res.ok) throw new Error("ESP32 capture failed");
         const blob = await res.blob();
         if (!blob || cancelled) return;
@@ -199,6 +204,37 @@ export default function Patrol() {
           return url;
         });
         setCameraError("");
+
+        // one-time measurement of frame dimensions for overlay scaling
+        if (!frameSize.width || !frameSize.height) {
+          const img = new Image();
+          img.onload = () => {
+            setFrameSize({ width: img.naturalWidth, height: img.naturalHeight });
+          };
+          img.src = url;
+        }
+
+        // periodically run face recognition on the live feed
+        const now = Date.now();
+        const MIN_INTERVAL_MS = 2000;
+        if (
+          !recognitionInFlightRef.current &&
+          now - lastRecognitionAtRef.current >= MIN_INTERVAL_MS
+        ) {
+          lastRecognitionAtRef.current = now;
+          recognitionInFlightRef.current = true;
+          const file = new File([blob], "frame.jpg", { type: blob.type || "image/jpeg" });
+          runFaceRecognition(file)
+            .then((data) => {
+              setDetections(data.detections || []);
+            })
+            .catch(() => {
+              // ignore recognition errors
+            })
+            .finally(() => {
+              recognitionInFlightRef.current = false;
+            });
+        }
       } catch (e) {
         if (!cancelled) {
           setCameraError("ESP32-CAM not reachable");
@@ -216,6 +252,7 @@ export default function Patrol() {
         if (old) URL.revokeObjectURL(old);
         return null;
       });
+      setDetections([]);
     };
   }, []);
 
@@ -223,7 +260,7 @@ export default function Patrol() {
     setLoading(true);
     setStatus("");
     try {
-      const res = await fetch(`${ESP32_API}/patrol/start`);
+      const res = await fetch(`${ESP32_ROVER_API}/patrol/start`);
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         setStatus(data.error || "Failed to start patrol.");
@@ -241,7 +278,7 @@ export default function Patrol() {
     setLoading(true);
     setStatus("");
     try {
-      const res = await fetch(`${ESP32_API}/patrol/stop`);
+      const res = await fetch(`${ESP32_ROVER_API}/patrol/stop`);
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         setStatus(data.error || "Failed to stop patrol.");
@@ -482,17 +519,47 @@ export default function Patrol() {
             <h2 className="text-xl font-semibold text-cyan-400 mb-2">Live Camera</h2>
             <div className="flex items-center justify-center border border-cyan-500 rounded-lg bg-black/60 min-h-[180px]">
               {cameraFrameUrl ? (
-                <img
-                  src={cameraFrameUrl}
-                  alt="ESP32 live view"
-                  className="max-h-64 rounded-md object-contain"
-                />
+                <div className="relative">
+                  <img
+                    src={cameraFrameUrl}
+                    alt="ESP32 live view"
+                    className="max-h-64 rounded-md object-contain"
+                  />
+                  {frameSize.width && frameSize.height && detections.map((d, idx) => {
+                    const bbox = d.bbox || [];
+                    if (bbox.length !== 4) return null;
+                    const [x1, y1, x2, y2] = bbox;
+                    const left = (x1 / frameSize.width) * 100;
+                    const top = (y1 / frameSize.height) * 100;
+                    const width = ((x2 - x1) / frameSize.width) * 100;
+                    const height = ((y2 - y1) / frameSize.height) * 100;
+                    const isUnknown = !d.person_name || d.person_name === "Unknown";
+                    const borderColor = isUnknown ? "border-red-500" : "border-emerald-400";
+                    const bgColor = isUnknown ? "bg-red-500" : "bg-emerald-500";
+                    const showScore = typeof d.match_score === "number" && d.match_score >= 0.2;
+                    const scoreLabel = showScore ? ` (${(d.match_score * 100).toFixed(1)}%)` : "";
+                    return (
+                      <div
+                        key={idx}
+                        className={`absolute border-2 ${borderColor} pointer-events-none`}
+                        style={{ left: `${left}%`, top: `${top}%`, width: `${width}%`, height: `${height}%` }}
+                      >
+                        <div
+                          className={`absolute left-0 -top-5 px-1 py-0.5 text-[10px] font-semibold text-white rounded ${bgColor}`}
+                        >
+                          {isUnknown ? "Unknown" : d.person_name}
+                          {scoreLabel}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
               ) : (
                 <span className="text-gray-400 text-sm">CAMERA STREAM OFFLINE</span>
               )}
             </div>
             <p className="text-xs text-gray-500 mt-2">
-              {cameraError || `ESP32-CAM at ${ESP32_API}`}
+              {cameraError || `ESP32-CAM at ${ESP32_CAM_API}`}
             </p>
           </div>
         </div>

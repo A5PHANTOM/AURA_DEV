@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import Navbar from '../components/Navbar';
 import Starfield from '../components/Starfield';
 import { runFaceRecognition } from '../services/faceService';
-import { ESP32_API } from '../services/espConfig';
+import { ESP32_CAM_API } from '../services/espConfig';
 
 export default function FaceRecognition() {
   const [selectedFile, setSelectedFile] = useState(null);
@@ -42,7 +42,7 @@ export default function FaceRecognition() {
   }, []);
   const fetchEsp32Snapshot = async () => {
     try {
-      const res = await fetch(`${ESP32_API}/capture`);
+      const res = await fetch(`${ESP32_CAM_API}/capture`);
       if (!res.ok) {
         throw new Error('Failed to fetch image from ESP32 camera');
       }
@@ -190,7 +190,7 @@ export default function FaceRecognition() {
           {mode === 'camera' && (
             <div className="mt-2 flex flex-col gap-3 items-start">
               <p className="text-xs text-slate-300">
-                Source: ESP32 camera at {ESP32_API}. Snapshots from this camera are used for
+                Source: ESP32 camera at {ESP32_CAM_API}. Snapshots from this camera are used for
                 both preview and live face recognition.
               </p>
               <div className="flex gap-2">

@@ -1,6 +1,7 @@
 import json
 import os
 from pathlib import Path
+from datetime import datetime
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, Depends, Form, Body
 from fastapi.middleware.cors import CORSMiddleware
@@ -13,6 +14,7 @@ from .auth import routes as auth_routes
 from . import models
 from .auth.utils import get_password_hash
 from .face_recognition import detect_faces, compute_embeddings_for_detections, parse_embedding
+from .telegram_notifications import send_telegram_message
 
 
 app = FastAPI(title="Auth Backend")
@@ -31,16 +33,15 @@ BASE_DIR = Path(__file__).parent
 MEDIA_ROOT = BASE_DIR / "media"
 PEOPLE_MEDIA_ROOT = MEDIA_ROOT / "people"
 
-# CORS for React frontend (include Vite dev server origins)
-origins = [
-    "http://localhost:3000",
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-]
+# Main on-disk log file (append-only, JSON-per-line)
+MAIN_LOG_FILE = BASE_DIR / "aura_main.log"
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    # For development, allow all origins so that
+    # mobile devices on the LAN (e.g. http://192.168.x.x:5173)
+    # can call the API.
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -80,21 +81,43 @@ def get_db():
         db.close()
 
 
+def _append_main_log(entry: dict) -> None:
+    """Append a single log entry to the main log file.
+
+    Best-effort only: any filesystem errors are ignored so that
+    logging never breaks main flows.
+    """
+    try:
+        MAIN_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with MAIN_LOG_FILE.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except Exception:
+        # Do not propagate logging failures
+        pass
+
+
 def add_system_log(db: Session, level: str, source: str, category: str, message: str, data=None):
-    """Persist a system log entry, swallowing any database errors.
+    """Persist a system log entry to DB and main log file.
 
     Logging must never break main flows, so errors are ignored.
     """
+    level = str(level or "info")
+    source = str(source or "") or None
+    category = str(category or "") or None
+    message = str(message or "")
+
+    if not message:
+        return
+
+    # Write to DB
     try:
         log = models.SystemLog(
-            level=str(level or "info"),
-            source=str(source or "") or None,
-            category=str(category or "") or None,
-            message=str(message or ""),
+            level=level,
+            source=source,
+            category=category,
+            message=message,
             data=json.dumps(data) if data is not None else None,
         )
-        if not log.message:
-            return
         db.add(log)
         db.commit()
     except Exception:
@@ -103,6 +126,17 @@ def add_system_log(db: Session, level: str, source: str, category: str, message:
         except Exception:
             pass
 
+    # Also append to main log file
+    entry = {
+        "ts": datetime.utcnow().isoformat() + "Z",
+        "level": level,
+        "source": source,
+        "category": category,
+        "message": message,
+        "data": data,
+    }
+    _append_main_log(entry)
+
 
 app.include_router(auth_routes.router)
 
@@ -110,6 +144,40 @@ app.include_router(auth_routes.router)
 @app.get('/')
 def read_root():
     return {"message": "Auth backend is running"}
+
+
+@app.post("/alert/fire")
+def fire_alert(db: Session = Depends(get_db)):
+    """Trigger a fire alert and send a Telegram notification if configured.
+
+    This endpoint is intended to be called when the flame sensor detects fire.
+    """
+    sent = send_telegram_message("🔥 FIRE ALERT!\nImmediate action required.")
+    add_system_log(
+        db,
+        level="alert",
+        source="backend",
+        category="flame",
+        message="Fire alert triggered; Telegram notification %s" % ("sent" if sent else "skipped"),
+    )
+    return {"status": "Fire alert processed", "telegram_sent": sent}
+
+
+@app.post("/alert/gas")
+def gas_alert(db: Session = Depends(get_db)):
+    """Trigger a gas alert and send a Telegram notification if configured.
+
+    This endpoint is intended to be called when gas levels exceed the threshold.
+    """
+    sent = send_telegram_message("☣️ GAS ALERT!\nUnsafe gas levels detected.")
+    add_system_log(
+        db,
+        level="warning",
+        source="backend",
+        category="gas",
+        message="Gas alert triggered; Telegram notification %s" % ("sent" if sent else "skipped"),
+    )
+    return {"status": "Gas alert processed", "telegram_sent": sent}
 
 
 @app.post("/face-recognition")
@@ -553,6 +621,18 @@ def create_log(payload: dict = Body(...), db: Session = Depends(get_db)):
     db.add(log)
     db.commit()
     db.refresh(log)
+
+    # also mirror into the main log file
+    _append_main_log(
+        {
+            "ts": (log.created_at.isoformat() if log.created_at else datetime.utcnow().isoformat() + "Z"),
+            "level": log.level,
+            "source": log.source,
+            "category": log.category,
+            "message": log.message,
+            "data": data,
+        }
+    )
 
     return {
         "id": log.id,

@@ -2,7 +2,7 @@ import { useEffect, useState, useRef } from "react";
 import Navbar from "../components/Navbar";
 import Starfield from "../components/Starfield";
 import { API_URL as BACKEND_API } from "../services/faceService";
-import { ESP32_API, GAS_THRESHOLD } from "../services/espConfig";
+import { ESP32_ROVER_API, GAS_THRESHOLD } from "../services/espConfig";
 
 function Bar({ label, value, color }) {
   const clamped = Math.max(0, Math.min(100, value ?? 0));
@@ -66,7 +66,7 @@ export default function Analytics() {
 
   useEffect(() => {
     const poll = () => {
-      fetch(`${ESP32_API}/status`)
+      fetch(`${ESP32_ROVER_API}/status`)
         .then((r) => r.json())
         .then((data) => {
           setEspStatus(data);
@@ -96,6 +96,11 @@ export default function Analytics() {
               }),
             }).catch(() => {});
 
+            // trigger Telegram fire alert (best-effort)
+            fetch(`${BACKEND_API}/alert/fire`, {
+              method: "POST",
+            }).catch(() => {});
+
             loadLogs();
           }
           lastFlameRef.current = flameNow;
@@ -113,6 +118,11 @@ export default function Analytics() {
                 message: `Gas level HIGH (${gasVal})`,
                 data,
               }),
+            }).catch(() => {});
+
+            // trigger Telegram gas alert (best-effort)
+            fetch(`${BACKEND_API}/alert/gas`, {
+              method: "POST",
             }).catch(() => {});
             loadLogs();
           }
@@ -246,6 +256,14 @@ export default function Analytics() {
             </p>
             {espError && (
               <p className="text-xs text-red-400 mt-1">{espError}</p>
+            )}
+            {!espError && (
+              <p className="mt-1 text-[10px] text-slate-500 break-words">
+                Raw:&nbsp;
+                <span className="font-mono">
+                  {espStatus ? JSON.stringify(espStatus) : "(no data)"}
+                </span>
+              </p>
             )}
           </div>
         </div>

@@ -1,4 +1,9 @@
 // Shared ESP32 configuration for frontend
-export const ESP32_API = "http://192.168.216.32";
-// MUST match GAS_THRESHOLD in the ESP32 sketch.
+// Rover board (sensors, status, movement, patrol)
+export const ESP32_ROVER_API = "http://192.168.216.32";
+
+// ESP32-CAM board (camera snapshots for live view / face recognition)
+export const ESP32_CAM_API = "http://192.168.216.241";
+
+// MUST match GAS_THRESHOLD in the rover ESP32 sketch.
 export const GAS_THRESHOLD = 1500;

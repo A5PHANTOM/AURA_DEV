@@ -1,6 +1,12 @@
 import axios from 'axios';
 
-export const API_URL = import.meta.env.VITE_API_BASE || 'http://127.0.0.1:8000';
+// Backend base URL shared by face recognition, people, and analytics.
+// Priority:
+// 1) VITE_API_BASE (for custom setups)
+// 2) Same host as the frontend (works on LAN/mobile) on port 8000
+export const API_URL =
+  import.meta.env.VITE_API_BASE ||
+  `http://${window.location.hostname}:8000`;
 
 export async function runFaceRecognition(file) {
   const formData = new FormData();
