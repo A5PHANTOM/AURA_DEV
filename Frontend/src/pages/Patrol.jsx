@@ -27,6 +27,10 @@ export default function Patrol() {
   const [cameraFrameUrl, setCameraFrameUrl] = useState(null);
   const [cameraError, setCameraError] = useState("");
   const [detections, setDetections] = useState([]);
+  const [sessions, setSessions] = useState([]);
+  const [sessionsError, setSessionsError] = useState("");
+  const [sessionsLoading, setSessionsLoading] = useState(false);
+  const [analyzingSessionId, setAnalyzingSessionId] = useState(null);
   const [frameSize, setFrameSize] = useState({ width: null, height: null });
   const lastRecognitionAtRef = useRef(0);
   const recognitionInFlightRef = useRef(false);
@@ -60,20 +64,19 @@ export default function Patrol() {
     setLoading(true);
     setStatus("");
     try {
-      const res = await fetch(`${ESP32_ROVER_API}/patrol/set`, {
+      const res = await fetch(`${BACKEND_API}/rover/patrol/set`, {
         method: "POST",
-        // Send JSON, but let the browser use a simple Content-Type
-        // (avoids a CORS preflight that the ESP32 server doesn't handle)
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(steps),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        setStatus(data.error || "Failed to set patrol path.");
+        setStatus(data.detail || data.error || "Failed to set patrol path.");
       } else {
         setStatus(`Path set with ${data.steps ?? steps.length} steps.`);
       }
     } catch (e) {
-      setStatus("ESP32 not reachable.");
+      setStatus("Backend patrol proxy not reachable.");
     } finally {
       setLoading(false);
     }
@@ -188,6 +191,31 @@ export default function Patrol() {
     loadSavedPaths();
   }, []);
 
+  const loadSessions = async () => {
+    setSessionsLoading(true);
+    try {
+      const res = await fetch(`${BACKEND_API}/patrol-sessions?limit=50`);
+      if (!res.ok) throw new Error("Failed to load patrol sessions");
+      const data = await res.json();
+      if (Array.isArray(data)) {
+        setSessions(data);
+        setSessionsError("");
+      } else {
+        setSessions([]);
+        setSessionsError("Unexpected patrol sessions payload");
+      }
+    } catch (e) {
+      setSessions([]);
+      setSessionsError("Failed to load patrol sessions from backend");
+    } finally {
+      setSessionsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadSessions();
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
 
@@ -260,15 +288,27 @@ export default function Patrol() {
     setLoading(true);
     setStatus("");
     try {
-      const res = await fetch(`${ESP32_ROVER_API}/patrol/start`);
+      const res = await fetch(`${BACKEND_API}/rover/patrol/start`, {
+        method: "POST",
+      });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        setStatus(data.error || "Failed to start patrol.");
+        setStatus(data.detail || data.error || "Failed to start patrol.");
       } else {
         setStatus(data.state || "Patrol started.");
+        try {
+          await fetch(`${BACKEND_API}/patrol-sessions/start`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ patrol_path_id: selectedPathId || null }),
+          });
+          loadSessions();
+        } catch (e) {
+          // best-effort; ignore
+        }
       }
     } catch (e) {
-      setStatus("ESP32 not reachable.");
+      setStatus("Backend patrol proxy not reachable.");
     } finally {
       setLoading(false);
     }
@@ -278,15 +318,25 @@ export default function Patrol() {
     setLoading(true);
     setStatus("");
     try {
-      const res = await fetch(`${ESP32_ROVER_API}/patrol/stop`);
+      const res = await fetch(`${BACKEND_API}/rover/patrol/stop`, {
+        method: "POST",
+      });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        setStatus(data.error || "Failed to stop patrol.");
+        setStatus(data.detail || data.error || "Failed to stop patrol.");
       } else {
         setStatus(data.state || "Patrol stopped.");
+        try {
+          await fetch(`${BACKEND_API}/patrol-sessions/stop`, {
+            method: "POST",
+          });
+          loadSessions();
+        } catch (e) {
+          // best-effort; ignore
+        }
       }
     } catch (e) {
-      setStatus("ESP32 not reachable.");
+      setStatus("Backend patrol proxy not reachable.");
     } finally {
       setLoading(false);
     }
@@ -561,6 +611,92 @@ export default function Patrol() {
             <p className="text-xs text-gray-500 mt-2">
               {cameraError || `ESP32-CAM at ${ESP32_CAM_API}`}
             </p>
+          </div>
+
+          <div className="mt-6 border-t border-white/10 pt-4">
+            <h2 className="text-xl font-semibold text-cyan-400 mb-2">Patrol History</h2>
+            <p className="text-xs text-slate-300 mb-2 max-w-xl">
+              Recent patrol runs with their start/end times and AI-generated
+              summaries based on events and logs during each patrol.
+            </p>
+            {sessionsError && (
+              <p className="text-xs text-red-400 mb-1">{sessionsError}</p>
+            )}
+            <div className="flex items-center justify-between mb-2 text-xs">
+              <span className="text-slate-400">
+                {sessionsLoading ? "Loading patrol sessions…" : `Showing ${sessions.length} session(s)`}
+              </span>
+              <button
+                type="button"
+                onClick={loadSessions}
+                className="px-2 py-1 rounded border border-white/20 text-[11px] text-slate-100 hover:bg-white/10"
+              >
+                Refresh
+              </button>
+            </div>
+            {sessions.length === 0 ? (
+              <p className="text-xs text-slate-400">No patrol sessions recorded yet.</p>
+            ) : (
+              <div className="max-h-64 overflow-y-auto space-y-2 text-xs">
+                {sessions.map((s) => {
+                  const start = s.start_time ? new Date(s.start_time) : null;
+                  const end = s.end_time ? new Date(s.end_time) : null;
+                  const range = start
+                    ? `${start.toLocaleDateString()} ${start.toLocaleTimeString()}${
+                        end ? ` → ${end.toLocaleTimeString()}` : " (ongoing)"
+                      }`
+                    : "Unknown time";
+                  return (
+                    <div
+                      key={s.id}
+                      className="border border-white/10 rounded-lg px-3 py-2 bg-black/40 flex flex-col gap-1"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-semibold text-slate-100">
+                          Session #{s.id}
+                          {s.patrol_path_name ? ` – ${s.patrol_path_name}` : ""}
+                        </span>
+                        <span className="text-[10px] uppercase text-slate-400">
+                          {s.status}
+                        </span>
+                      </div>
+                      <span className="text-[11px] text-slate-300">{range}</span>
+                      <span className="text-[11px] text-slate-200 mt-1">
+                        {s.ai_status === "succeeded"
+                          ? s.ai_summary_short || "AI summary available."
+                          : s.ai_status === "unavailable"
+                          ? "AI server was unavailable for this patrol."
+                          : s.ai_status === "failed"
+                          ? "AI analysis failed for this patrol."
+                          : "No AI summary yet for this patrol."}
+                      </span>
+                      <div className="mt-1 flex items-center gap-2">
+                        <button
+                          type="button"
+                          disabled={analyzingSessionId === s.id}
+                          onClick={async () => {
+                            setAnalyzingSessionId(s.id);
+                            try {
+                              await fetch(`${BACKEND_API}/patrol-sessions/${s.id}/analyze`, {
+                                method: "POST",
+                              });
+                              loadSessions();
+                            } catch (e) {
+                              // backend logs errors; keep UI simple
+                            } finally {
+                              setAnalyzingSessionId(null);
+                            }
+                          }}
+                          className="text-[11px] px-2 py-1 rounded bg-cyan-600 hover:bg-cyan-500 disabled:opacity-60 text-white"
+                        >
+                          {analyzingSessionId === s.id ? "Analyzing…" : "Analyze with AI"}
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </div>
       </div>

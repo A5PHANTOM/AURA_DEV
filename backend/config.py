@@ -20,3 +20,14 @@ REFRESH_TOKEN_EXPIRE_DAYS = int(os.getenv('REFRESH_TOKEN_EXPIRE_DAYS', '7'))
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 
+# LLaVA / Ollama configuration
+LLAVA_BASE_URL = os.getenv('LLAVA_BASE_URL', 'http://localhost:11434')
+LLAVA_MODEL_NAME = os.getenv('LLAVA_MODEL_NAME', 'llava:13b')
+LLAVA_TIMEOUT_SECONDS = float(os.getenv('LLAVA_TIMEOUT_SECONDS', '20'))
+
+# ESP32 rover configuration (optional)
+# Base URL of the ESP32 rover API, e.g. "http://192.168.216.32".
+# If set, the backend /status report will actively ping
+# "<ESP32_ROVER_API>/status" to determine rover online/offline.
+ESP32_ROVER_API = os.getenv('ESP32_ROVER_API')
+

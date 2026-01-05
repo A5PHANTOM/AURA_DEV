@@ -23,7 +23,7 @@ def _get_telegram_config() -> Optional[tuple[str, str]]:
 
 
 def send_telegram_message(text: str) -> bool:
-    """Send a Telegram message using the configured bot.
+    """Send a plain-text Telegram message using the configured bot.
 
     Returns True on success, False on failure. Fails silently (logs only)
     so that notifications never break main application flows.
@@ -46,4 +46,35 @@ def send_telegram_message(text: str) -> bool:
         return True
     except Exception as exc:  # noqa: BLE001
         logger.warning("Error sending Telegram message", exc_info=exc)
+        return False
+
+
+def send_telegram_photo(photo_bytes: bytes, caption: str) -> bool:
+    """Send a photo with caption to the configured Telegram chat.
+
+    The photo is uploaded directly from bytes, so it does not need to be
+    publicly accessible via URL. Returns True on success, False on failure.
+    """
+
+    cfg = _get_telegram_config()
+    if cfg is None:
+        return False
+
+    bot_token, chat_id = cfg
+    url = f"https://api.telegram.org/bot{bot_token}/sendPhoto"
+
+    files = {"photo": ("event.jpg", photo_bytes)}
+    data = {"chat_id": chat_id, "caption": caption}
+
+    try:
+        resp = requests.post(url, data=data, files=files, timeout=10)
+        if resp.status_code != 200:
+            logger.warning(
+                "Telegram sendPhoto failed",
+                extra={"status": resp.status_code, "body": resp.text},
+            )
+            return False
+        return True
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Error sending Telegram photo", exc_info=exc)
         return False
