@@ -4,9 +4,14 @@ import axios from 'axios';
 // Priority:
 // 1) VITE_API_BASE (for custom setups)
 // 2) Same host as the frontend (works on LAN/mobile) on port 8000
+const API_HOST =
+  window.location.hostname === 'localhost'
+    ? '127.0.0.1'
+    : window.location.hostname;
+
 export const API_URL =
   import.meta.env.VITE_API_BASE ||
-  `http://${window.location.hostname}:8000`;
+  `http://${API_HOST}:8000`;
 
 export async function runFaceRecognition(file) {
   const formData = new FormData();

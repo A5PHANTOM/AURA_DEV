@@ -9,6 +9,7 @@ import Patrol from './pages/Patrol'
 import Analytics from './pages/Analytics'
 import People from './pages/People'
 import Telegram from './pages/Telegram'
+import Chatbot from './pages/Chatbot'
 import ProtectedRoute from './components/ProtectedRoute'
 
 export default function App() {
@@ -24,6 +25,7 @@ export default function App() {
       <Route path="/analytics" element={<ProtectedRoute><Analytics /></ProtectedRoute>} />
       <Route path="/people" element={<ProtectedRoute><People /></ProtectedRoute>} />
       <Route path="/telegram" element={<ProtectedRoute><Telegram /></ProtectedRoute>} />
+      <Route path="/chatbot" element={<ProtectedRoute><Chatbot /></ProtectedRoute>} />
     </Routes>
   )
 }

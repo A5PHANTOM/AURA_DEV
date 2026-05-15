@@ -13,6 +13,18 @@ const ACTION_OPTIONS = [
   { value: "backward", label: "Backward" },
 ];
 
+const REQUEST_TIMEOUT_MS = 10000;
+
+async function fetchWithTimeout(url, options = {}, timeoutMs = REQUEST_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export default function Patrol() {
   const [steps, setSteps] = useState([]);
   const [currentAction, setCurrentAction] = useState("forward");
@@ -23,6 +35,8 @@ export default function Patrol() {
   const [scheduleInput, setScheduleInput] = useState("");
   const [scheduleSlots, setScheduleSlots] = useState([]);
   const [savedPaths, setSavedPaths] = useState([]);
+  const [savedPathsError, setSavedPathsError] = useState("");
+  const [savedPathsLoading, setSavedPathsLoading] = useState(false);
   const [selectedPathId, setSelectedPathId] = useState(null);
   const [cameraFrameUrl, setCameraFrameUrl] = useState(null);
   const [cameraError, setCameraError] = useState("");
@@ -47,12 +61,27 @@ export default function Patrol() {
   };
 
   const loadSavedPaths = async () => {
+    setSavedPathsLoading(true);
     try {
-      const res = await fetch(`${BACKEND_API}/patrol-paths`);
+      setStatus("");
+      setSavedPathsError("");
+      const res = await fetchWithTimeout(`${BACKEND_API}/patrol-paths`);
+      if (!res.ok) {
+        throw new Error(`Failed to load patrol paths (HTTP ${res.status})`);
+      }
       const data = await res.json();
-      setSavedPaths(Array.isArray(data) ? data : []);
-    } catch {
-      // ignore for now
+      if (Array.isArray(data)) {
+        setSavedPaths(data);
+      } else {
+        setSavedPathsError("Unexpected response while loading saved paths.");
+        setStatus("Unexpected response when loading saved paths.");
+      }
+    } catch (e) {
+      // Keep existing paths in UI on transient failures.
+      setSavedPathsError("Could not refresh saved paths from backend.");
+      setStatus("Could not load saved paths from backend.");
+    } finally {
+      setSavedPathsLoading(false);
     }
   };
 
@@ -64,7 +93,7 @@ export default function Patrol() {
     setLoading(true);
     setStatus("");
     try {
-      const res = await fetch(`${BACKEND_API}/rover/patrol/set`, {
+      const res = await fetchWithTimeout(`${BACKEND_API}/rover/patrol/set`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(steps),
@@ -76,7 +105,11 @@ export default function Patrol() {
         setStatus(`Path set with ${data.steps ?? steps.length} steps.`);
       }
     } catch (e) {
-      setStatus("Backend patrol proxy not reachable.");
+      if (e?.name === "AbortError") {
+        setStatus("Request timed out. Rover/backend may be unreachable.");
+      } else {
+        setStatus("Backend patrol proxy not reachable.");
+      }
     } finally {
       setLoading(false);
     }
@@ -95,7 +128,7 @@ export default function Patrol() {
     setLoading(true);
     setStatus("");
     try {
-      const res = await fetch(`${BACKEND_API}/patrol-paths`, {
+      const res = await fetchWithTimeout(`${BACKEND_API}/patrol-paths`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -113,7 +146,11 @@ export default function Patrol() {
         loadSavedPaths();
       }
     } catch (e) {
-      setStatus("Backend not reachable.");
+      if (e?.name === "AbortError") {
+        setStatus("Request timed out while saving path.");
+      } else {
+        setStatus("Backend not reachable.");
+      }
     } finally {
       setLoading(false);
     }
@@ -136,7 +173,7 @@ export default function Patrol() {
     setLoading(true);
     setStatus("");
     try {
-      const res = await fetch(`${BACKEND_API}/patrol-paths/${selectedPathId}/schedule`, {
+      const res = await fetchWithTimeout(`${BACKEND_API}/patrol-paths/${selectedPathId}/schedule`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -158,7 +195,11 @@ export default function Patrol() {
         );
       }
     } catch (e) {
-      setStatus("Backend not reachable.");
+      if (e?.name === "AbortError") {
+        setStatus("Request timed out while saving schedule.");
+      } else {
+        setStatus("Backend not reachable.");
+      }
     } finally {
       setLoading(false);
     }
@@ -168,7 +209,7 @@ export default function Patrol() {
     setLoading(true);
     setStatus("");
     try {
-      const res = await fetch(`${BACKEND_API}/patrol-paths/${id}`, { method: "DELETE" });
+      const res = await fetchWithTimeout(`${BACKEND_API}/patrol-paths/${id}`, { method: "DELETE" });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         setStatus(data.detail || data.error || "Failed to delete path.");
@@ -180,7 +221,11 @@ export default function Patrol() {
         setStatus("Path deleted.");
       }
     } catch (e) {
-      setStatus("Backend not reachable.");
+      if (e?.name === "AbortError") {
+        setStatus("Request timed out while deleting path.");
+      } else {
+        setStatus("Backend not reachable.");
+      }
     } finally {
       setLoading(false);
     }
@@ -194,7 +239,7 @@ export default function Patrol() {
   const loadSessions = async () => {
     setSessionsLoading(true);
     try {
-      const res = await fetch(`${BACKEND_API}/patrol-sessions?limit=50`);
+      const res = await fetchWithTimeout(`${BACKEND_API}/patrol-sessions?limit=50`);
       if (!res.ok) throw new Error("Failed to load patrol sessions");
       const data = await res.json();
       if (Array.isArray(data)) {
@@ -288,7 +333,7 @@ export default function Patrol() {
     setLoading(true);
     setStatus("");
     try {
-      const res = await fetch(`${BACKEND_API}/rover/patrol/start`, {
+      const res = await fetchWithTimeout(`${BACKEND_API}/rover/patrol/start`, {
         method: "POST",
       });
       const data = await res.json().catch(() => ({}));
@@ -297,18 +342,22 @@ export default function Patrol() {
       } else {
         setStatus(data.state || "Patrol started.");
         try {
-          await fetch(`${BACKEND_API}/patrol-sessions/start`, {
+          await fetchWithTimeout(`${BACKEND_API}/patrol-sessions/start`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ patrol_path_id: selectedPathId || null }),
-          });
+          }, 6000);
           loadSessions();
         } catch (e) {
           // best-effort; ignore
         }
       }
     } catch (e) {
-      setStatus("Backend patrol proxy not reachable.");
+      if (e?.name === "AbortError") {
+        setStatus("Request timed out. Could not start patrol.");
+      } else {
+        setStatus("Backend patrol proxy not reachable.");
+      }
     } finally {
       setLoading(false);
     }
@@ -318,7 +367,7 @@ export default function Patrol() {
     setLoading(true);
     setStatus("");
     try {
-      const res = await fetch(`${BACKEND_API}/rover/patrol/stop`, {
+      const res = await fetchWithTimeout(`${BACKEND_API}/rover/patrol/stop`, {
         method: "POST",
       });
       const data = await res.json().catch(() => ({}));
@@ -327,16 +376,20 @@ export default function Patrol() {
       } else {
         setStatus(data.state || "Patrol stopped.");
         try {
-          await fetch(`${BACKEND_API}/patrol-sessions/stop`, {
+          await fetchWithTimeout(`${BACKEND_API}/patrol-sessions/stop`, {
             method: "POST",
-          });
+          }, 6000);
           loadSessions();
         } catch (e) {
           // best-effort; ignore
         }
       }
     } catch (e) {
-      setStatus("Backend patrol proxy not reachable.");
+      if (e?.name === "AbortError") {
+        setStatus("Request timed out. Could not stop patrol.");
+      } else {
+        setStatus("Backend patrol proxy not reachable.");
+      }
     } finally {
       setLoading(false);
     }
@@ -478,8 +531,13 @@ export default function Patrol() {
                     Refresh
                   </button>
                 </div>
+                {savedPathsError && (
+                  <p className="text-[11px] text-amber-300 mb-2">{savedPathsError}</p>
+                )}
                 <div className="max-h-40 overflow-y-auto space-y-1">
-                  {savedPaths.length === 0 ? (
+                  {savedPathsLoading && savedPaths.length === 0 ? (
+                    <p className="text-xs text-slate-400">Loading saved paths...</p>
+                  ) : savedPaths.length === 0 ? (
                     <p className="text-xs text-slate-400">No saved paths.</p>
                   ) : (
                     savedPaths.map((p) => (

@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 
 from .database import engine, Base, SessionLocal
 from .auth import routes as auth_routes
-from . import models
+from . import models, schemas
 from .auth.utils import get_password_hash
 from .face_recognition import detect_faces, compute_embeddings_for_detections, parse_embedding
 from .telegram_notifications import send_telegram_message, send_telegram_photo
@@ -956,6 +956,130 @@ def read_root():
     return {"message": "Auth backend is running"}
 
 
+@app.post("/chatbot", response_model=schemas.ChatbotResponse)
+def chatbot_endpoint(
+    payload: schemas.ChatbotRequest = Body(...),
+    db: Session = Depends(get_db),
+):
+    """General AURA project chatbot backed by LLaVA/Ollama.
+
+    This is *not* limited to rover logs; it acts as a normal
+    conversational assistant with some extra context about the
+    AURA project and its components.
+    """
+
+    message = (payload.message or "").strip()
+    if not message:
+        raise HTTPException(status_code=400, detail="Empty message")
+
+    lowered = message.lower()
+    # Fast local answer for status/report style questions.
+    if any(k in lowered for k in ("current report", "status report", "current status", "system status")):
+        answer = _build_status_report(db)
+        try:
+            add_system_log(
+                db,
+                level="info",
+                source="backend",
+                category="chatbot",
+                message="Chatbot exchange",
+                data={"question": message, "answer": answer, "mode": "local_status"},
+            )
+        except Exception:
+            pass
+        return schemas.ChatbotResponse(reply=answer)
+
+    # Build short live context to improve grounded answers.
+    status_report = _build_status_report(db)
+    recent_events = (
+        db.query(models.Event)
+        .order_by(models.Event.created_at.desc())
+        .limit(5)
+        .all()
+    )
+    recent_logs = (
+        db.query(models.SystemLog)
+        .order_by(models.SystemLog.created_at.desc())
+        .limit(8)
+        .all()
+    )
+
+    event_lines = []
+    for e in recent_events:
+        ts = e.created_at.isoformat() if e.created_at else ""
+        event_lines.append(f"- {ts} | {e.event_type} | ai={e.ai_status or 'none'}")
+
+    log_lines = []
+    for l in recent_logs:
+        ts = l.created_at.isoformat() if l.created_at else ""
+        log_lines.append(f"- {ts} | {l.level} | {l.category or '-'} | {l.message}")
+
+    prompt = (
+        "You are AURA, an AI assistant for an ESP32-based autonomous "
+        "rover and surveillance project. The system has an ESP32 rover "
+        "board for movement and sensors (gas, flame, ultrasonic, edge), "
+        "an ESP32-CAM board for live video and face recognition, a "
+        "FastAPI backend, a React dashboard (manual, patrol, analytics, "
+        "people, Telegram pages) and a Telegram bot for alerts.\n\n"
+        "Answer the user's message as a helpful, concise assistant. "
+        "You can chat naturally; when relevant, reference the live system "
+        "context below. If asked for current report/status, summarize the "
+        "status context clearly.\n\n"
+        f"LIVE_STATUS:\n{status_report}\n\n"
+        "RECENT_EVENTS:\n"
+        + ("\n".join(event_lines) if event_lines else "(none)")
+        + "\n\nRECENT_LOGS:\n"
+        + ("\n".join(log_lines) if log_lines else "(none)")
+        + "\n\n"
+        f"User: {message}\nAssistant:"
+    )
+
+    try:
+        ai_result = analyze_text_with_llava(prompt)
+        answer = (ai_result.get("content") or "").strip()
+        if not answer:
+            answer = "I couldn't generate a reply just now. Please try again."
+    except LLaVAServerUnavailable as exc:
+        answer = (
+            "The AI server (Ollama / LLaVA) is not reachable right now. "
+            "Please make sure it is running and accessible at LLAVA_BASE_URL."
+        )
+        add_system_log(
+            db,
+            level="warning",
+            source="backend",
+            category="ai_llava",
+            message="Chatbot LLaVA server unavailable",
+            data={"error": str(exc)},
+        )
+    except LLaVAError as exc:
+        answer = "The AI model had a problem generating a reply. Please try again later."
+        add_system_log(
+            db,
+            level="error",
+            source="backend",
+            category="ai_llava",
+            message="Chatbot LLaVA error",
+            data={"error": str(exc)},
+        )
+
+    # Best-effort logging of the conversation
+    try:
+        add_system_log(
+            db,
+            level="info",
+            source="backend",
+            category="chatbot",
+            message="Chatbot exchange",
+            data={"question": message, "answer": answer},
+        )
+    except Exception:
+        # Never break chat on logging issues
+        pass
+
+    return schemas.ChatbotResponse(reply=answer)
+
+
 @app.post("/patrol-sessions/start")
 def start_patrol_session(
     payload: dict = Body(None),
@@ -1531,7 +1655,7 @@ def analyze_patrol_session(session_id: int, db: Session = Depends(get_db)):
 
 
 @app.post("/face-recognition")
-async def face_recognition_endpoint(
+def face_recognition_endpoint(
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
 ):
@@ -1544,7 +1668,9 @@ async def face_recognition_endpoint(
     if file.content_type not in {"image/jpeg", "image/png", "image/jpg"}:
         raise HTTPException(status_code=400, detail="Unsupported file type. Please upload a JPG or PNG image.")
 
-    image_bytes = await file.read()
+    # Read from the underlying file object so this sync endpoint can run in
+    # FastAPI's threadpool and avoid blocking the main event loop.
+    image_bytes = file.file.read()
     if not image_bytes:
         raise HTTPException(status_code=400, detail="Empty file uploaded.")
 

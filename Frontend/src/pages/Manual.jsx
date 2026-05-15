@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import Navbar from "../components/Navbar";
 import Starfield from "../components/Starfield";
 import { ESP32_ROVER_API, ESP32_CAM_API, GAS_THRESHOLD } from "../services/espConfig";
@@ -16,32 +16,51 @@ export default function Manual() {
   const lastFlameRef = useRef(false);
   const lastGasHighRef = useRef(false);
 
-  const move = async (dir) => {
-    try {
-      const res = await fetch(`${ESP32_ROVER_API}/move?dir=${dir}`);
-      const text = await res.text();
-      let json = null;
-      try {
-        json = JSON.parse(text);
-      } catch {
-        // ignore parse errors
+  const move = useCallback(
+    async (dir) => {
+      if (dir === "forward") {
+        const edgeDetected = !!data.edge;
+        const distanceVal =
+          typeof data.distance === "number" ? data.distance : null;
+        const tooClose = distanceVal !== null && distanceVal < 10; // cm threshold
+
+        if (edgeDetected || tooClose) {
+          setMoveMessage(
+            edgeDetected
+              ? "Blocked: edge detected, cannot move forward"
+              : `Blocked: obstacle too close (${distanceVal} cm), cannot move forward`,
+          );
+          return;
+        }
       }
 
-      if (!res.ok) {
-        if (json?.error === "SAFETY_ACTIVE") {
-          setMoveMessage(`Blocked: safety active (${json.state})`);
-        } else {
-          setMoveMessage("Move failed");
+      try {
+        const res = await fetch(`${ESP32_ROVER_API}/move?dir=${dir}`);
+        const text = await res.text();
+        let json = null;
+        try {
+          json = JSON.parse(text);
+        } catch {
+          // ignore parse errors
         }
-      } else if (json?.state) {
-        setMoveMessage(`State: ${json.state}`);
-      } else {
-        setMoveMessage("");
+
+        if (!res.ok) {
+          if (json?.error === "SAFETY_ACTIVE") {
+            setMoveMessage(`Blocked: safety active (${json.state})`);
+          } else {
+            setMoveMessage("Move failed");
+          }
+        } else if (json?.state) {
+          setMoveMessage(`State: ${json.state}`);
+        } else {
+          setMoveMessage("");
+        }
+      } catch (e) {
+        setMoveMessage("ESP32 not reachable");
       }
-    } catch (e) {
-      setMoveMessage("ESP32 not reachable");
-    }
-  };
+    },
+    [data],
+  );
 
   useEffect(() => {
     const down = (e) => {
@@ -58,7 +77,7 @@ export default function Manual() {
       window.removeEventListener("keydown", down);
       window.removeEventListener("keyup", up);
     };
-  }, []);
+  }, [move]);
 
   useEffect(() => {
     const i = setInterval(() => {

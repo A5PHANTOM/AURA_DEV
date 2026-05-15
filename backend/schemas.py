@@ -28,3 +28,11 @@ class Token(BaseModel):
 
 class TokenData(BaseModel):
     email: Optional[EmailStr] = None
+
+
+class ChatbotRequest(BaseModel):
+    message: str
+
+
+class ChatbotResponse(BaseModel):
+    reply: str
